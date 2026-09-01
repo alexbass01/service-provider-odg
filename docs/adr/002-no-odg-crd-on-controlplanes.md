@@ -1,4 +1,4 @@
-# ADR-0002: Not Running the ODG CRD on OCP ControlPlanes as DomainServiceAPI
+# ADR-002: Not Running the ODG CRD on OCP ControlPlanes as DomainServiceAPI
 
 - **Status:** Rejected
 - **Date:** 2025-08-31

@@ -1,4 +1,4 @@
-# ADR-0003: Self-Managed Database for Trial, Managed DB Investigated for Beta
+# ADR-003: Self-Managed Database for Trial, Managed DB Investigated for Beta
 
 - **Status:** To be discussed — Beta decision under investigation
 - **Date:** 2025-08-31

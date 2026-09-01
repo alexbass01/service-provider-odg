@@ -1,13 +1,13 @@
-# ADR-0001: ODG Uses a Dedicated Workload Cluster Type (`workload-odg`)
+# ADR-001: ODG Uses a Dedicated Workload Cluster Type (`workload-odg`)
 
 - **Status:** Accepted
 - **Date:** 2025-08-31
 
-## Context
+## Context and Problem Statement
 
 ODG could either share existing OCP workload clusters with other tenants or
 get its own cluster purpose. ODG has specific infrastructure needs (sizing,
-ingress, DNS, resource management) and benefits from isolation between
+gateway, DNS, resource management) and benefits from isolation between
 tenants.
 
 ## Decision
@@ -20,6 +20,7 @@ template and an optional separate Gardener project.
 - **Share existing OCP workload clusters** — rejected: no fine-tuned
   infrastructure for ODG, shared blast radius with other tenants, and no
   separate cost/access isolation.
+  Existing workload clusters are for 
 
 ## Consequences
 
