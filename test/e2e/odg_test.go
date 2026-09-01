@@ -10,6 +10,7 @@ import (
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/e2e-framework/klient/wait"
@@ -22,7 +23,6 @@ import (
 )
 
 func createDummyPullSecret(ctx context.Context, c *envconf.Config, namespace, name string) error {
-	// Create a dummy docker config for testing
 	dockerConfig := map[string]interface{}{
 		"auths": map[string]interface{}{
 			"test.example.com": map[string]string{
@@ -58,7 +58,6 @@ func TestServiceProvider(t *testing.T) {
 
 	basicProviderTest := features.New("provider test").
 		Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-			// Create dummy pull secret for testing
 			if err := createDummyPullSecret(ctx, c, "openmcp-system", "privateregcred"); err != nil {
 				t.Errorf("failed to create dummy pull secret: %v", err)
 			}
@@ -98,13 +97,8 @@ func TestServiceProvider(t *testing.T) {
 					t.Errorf("failed to create onboarding cluster objects: %v", err)
 					return ctx
 				}
-				// Note: We don't wait for ODG Ready status in e2e tests because the Flux
-				// resources (OCIRepository, HelmRelease) cannot become Ready with dummy
-				// credentials. The controller is working correctly - we just validate
-				// resource creation and configuration in subsequent assessments.
 				objList.DeepCopyInto(&onboardingList)
 
-				// Calculate tenant namespace for subsequent checks
 				tenantNamespace, err = getTenantNamespace("test-mcp", objList.Items[0].GetNamespace())
 				if err != nil {
 					t.Errorf("failed to calculate tenant namespace: %v", err)
@@ -115,57 +109,76 @@ func TestServiceProvider(t *testing.T) {
 				return ctx
 			},
 		).
-		Assess("verify OCIRepositories are created correctly",
+		Assess("verify OCIRepositories are created and ready",
 			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 				for _, chartName := range chartNames {
 					ociRepo := &sourcev1.OCIRepository{}
 					err := wait.For(
 						func(ctx context.Context) (bool, error) {
 							err := c.Client().Resources().Get(ctx, chartName, tenantNamespace, ociRepo)
-							return err == nil, nil
+							if err != nil {
+								return false, nil
+							}
+							return apimeta.IsStatusConditionTrue(ociRepo.Status.Conditions, "Ready"), nil
 						},
-						wait.WithTimeout(30*time.Second),
-						wait.WithInterval(2*time.Second),
+						wait.WithTimeout(3*time.Minute),
+						wait.WithInterval(5*time.Second),
 					)
 					if err != nil {
-						t.Errorf("OCIRepository %q was not created: %v", chartName, err)
+						t.Errorf("OCIRepository %q did not become Ready: %v", chartName, err)
 						continue
 					}
 					if ociRepo.Spec.SecretRef == nil || ociRepo.Spec.SecretRef.Name == "" {
 						t.Errorf("OCIRepository %q has no secretRef", chartName)
+					} else {
+						t.Logf("OCIRepository %q has secretRef: %s", chartName, ociRepo.Spec.SecretRef.Name)
 					}
-					t.Logf("OCIRepository %q validated (spec verified, status check skipped due to test credential limitations)", chartName)
+					t.Logf("OCIRepository %q is Ready", chartName)
 				}
 				return ctx
 			},
 		).
 		Assess("verify HelmReleases are created correctly",
 			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				// notReadyCharts lists charts that are not expected to become Ready in the test
+				// environment. Newly added charts are expected to become Ready by default.
+				notReadyCharts := map[string]bool{
+					"delivery-service": true,
+				}
 				for _, chartName := range chartNames {
 					helmRelease := &helmv2.HelmRelease{}
 					err := wait.For(
 						func(ctx context.Context) (bool, error) {
 							err := c.Client().Resources().Get(ctx, chartName, tenantNamespace, helmRelease)
-							return err == nil, nil
+							if err != nil {
+								return false, nil
+							}
+							if helmRelease.Spec.TargetNamespace != "odg-system" {
+								return false, nil
+							}
+							if helmRelease.Spec.ChartRef == nil || helmRelease.Spec.ChartRef.Name != chartName {
+								return false, nil
+							}
+							if helmRelease.Spec.KubeConfig == nil {
+								return false, nil
+							}
+							if notReadyCharts[chartName] {
+								return true, nil
+							}
+							return apimeta.IsStatusConditionTrue(helmRelease.Status.Conditions, "Ready"), nil
 						},
-						wait.WithTimeout(30*time.Second),
-						wait.WithInterval(2*time.Second),
+						wait.WithTimeout(5*time.Minute),
+						wait.WithInterval(5*time.Second),
 					)
 					if err != nil {
-						t.Errorf("HelmRelease %q was not created: %v", chartName, err)
+						t.Errorf("HelmRelease %q was not created or did not meet spec: %v", chartName, err)
 						continue
 					}
-					if helmRelease.Spec.TargetNamespace != "odg-system" {
-						t.Errorf("HelmRelease %q targetNamespace mismatch: got %q, want %q",
-							chartName, helmRelease.Spec.TargetNamespace, "odg-system")
+					if notReadyCharts[chartName] {
+						t.Logf("HelmRelease %q validated (spec verified, Ready check skipped - requires runtime config)", chartName)
+					} else {
+						t.Logf("HelmRelease %q is Ready", chartName)
 					}
-					if helmRelease.Spec.ChartRef == nil || helmRelease.Spec.ChartRef.Name != chartName {
-						t.Errorf("HelmRelease %q chartRef mismatch", chartName)
-					}
-					if helmRelease.Spec.KubeConfig == nil {
-						t.Errorf("HelmRelease %q should have KubeConfig configured for remote deployment", chartName)
-					}
-					t.Logf("HelmRelease %q validated (spec verified, deployment check skipped due to test credential limitations)", chartName)
 				}
 				return ctx
 			},
@@ -220,18 +233,29 @@ func TestServiceProvider(t *testing.T) {
 		).
 		Assess("verify domain objects can be created", providers.ImportDomainAPIs("test-mcp", "mcp")).
 		Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+			if *keepClusters {
+				t.Logf("--keep-clusters set: skipping onboarding teardown")
+				return ctx
+			}
 			onboardingConfig, err := clusterutils.OnboardingConfig()
 			if err != nil {
 				t.Error(err)
 				return ctx
 			}
 			for _, obj := range onboardingList.Items {
-				if err := resources.DeleteObject(ctx, onboardingConfig, &obj, wait.WithTimeout(time.Minute)); err != nil {
+				if err := resources.DeleteObject(ctx, onboardingConfig, &obj, wait.WithTimeout(8*time.Minute)); err != nil {
 					t.Errorf("failed to delete onboarding object: %v", err)
 				}
 			}
 			return ctx
 		}).
-		Teardown(providers.DeleteMCP("test-mcp", wait.WithTimeout(5*time.Minute)))
+		Teardown(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+			if *keepClusters {
+				t.Logf("--keep-clusters set: skipping MCP teardown")
+				return ctx
+			}
+			cleanupStuckGatewayFinalizers(ctx, t, c, tenantNamespace)
+			return providers.DeleteMCP("test-mcp", wait.WithTimeout(8*time.Minute))(ctx, t, c)
+		})
 	testenv.Test(t, basicProviderTest.Feature())
 }

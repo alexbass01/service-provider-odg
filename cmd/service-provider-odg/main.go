@@ -108,6 +108,9 @@ func initWorkloadScheme() {
 }
 
 const (
+	// PurposeWorkloadODG is the scheduler purpose for dedicated ODG workload clusters.
+	PurposeWorkloadODG = "workload-odg"
+
 	debugEnvVar = "DEV_DEBUG"
 )
 
@@ -389,8 +392,8 @@ func main() {
 			},
 		},
 	}
-	workloadClusterRequest := advanced.NewClusterRequest("workload", "wl", advanced.StaticClusterRequestSpecGenerator(&clustersv1alpha1.ClusterRequestSpec{
-		Purpose: clustersv1alpha1.PURPOSE_WORKLOAD,
+	workloadClusterRequest := advanced.NewClusterRequest("workload", "wl-odg", advanced.StaticClusterRequestSpecGenerator(&clustersv1alpha1.ClusterRequestSpec{
+		Purpose: PurposeWorkloadODG,
 	})).
 		WithNamespaceGenerator(advanced.DefaultNamespaceGeneratorForMCP).
 		WithTokenAccess(workloadTokenAccessConfig).

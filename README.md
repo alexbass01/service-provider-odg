@@ -17,6 +17,121 @@ When an `ODG` resource is created on the onboarding cluster, the controller:
 5. Creates a Flux `HelmRelease` per chart that deploys it into `odg-system` on the ODG workload cluster via a kubeconfig reference
 6. Deletes any resources of chart which are now longer advertised in the `ProviderConfig` from the tenant namespace
 
+```mermaid
+flowchart TB
+  subgraph Platform["Platform"]
+    SP["ServiceProvider"]
+    PCODG["Provider Config ODG"]
+
+    subgraph openmcp["openmcp-system"]
+      OpenMCP["OpenMCP Operator"]
+      SPODG["ServiceProvider ODG"]
+
+      OpenMCP -->|manages| SPODG
+    end
+
+    subgraph MCP["mcp-&lt;uuid&gt;*"]
+      FluxHR["Flux HelmReleases"]
+    end
+
+    subgraph fluxns["flux-system"]
+      FluxCtrl["Flux Controller"]
+    end
+
+    SP -->|reconciled by| OpenMCP
+    PCODG -->|used by| SPODG
+    SPODG -->|manages| FluxHR
+    FluxHR -->|reconciled by| FluxCtrl
+  end
+
+  subgraph Onboarding["Onboarding"]
+    SPAODG["ServiceProviderAPI ODG"]
+    ODGCFG["ODG Configuration & Secrets"]
+
+    ODGCFG -->|referenced by| SPAODG
+  end
+
+  subgraph WorkloadODG["Workload-ODG (multiple)"]
+    ODGAll["ODG CRDs & Components"]
+  end
+
+  SPAODG -->|reconciled by| SPODG
+  FluxCtrl -->|manages| ODGAll
+```
+
+<details>
+<summary>Detailed Architecture</summary>
+
+```mermaid
+flowchart TB
+  subgraph Platform["Platform"]
+    SP["ServiceProvider\n- ServiceProvider ODG Image Location"]
+    PCODG["Provider Config ODG\n-ODG Helm Charts\n- Image Locations\n- Helm Values"]
+
+    subgraph openmcp["openmcp-system"]
+      OpenMCP["OpenMCP Operator"]
+      SPODG["ServiceProvider ODG"]
+      IPS1["ImagePullSecret"]
+
+      OpenMCP -->|manages| SPODG
+      IPS1 -->|used by| SPODG
+    end
+
+    subgraph MCP["mcp-&lt;uuid&gt;*"]
+      ARWODG["AccessRequest Workload-ODG"]
+      KWODG["Kubeconfig Workload-ODG"]
+      HVS["Helm Values Secrets"]
+      FluxHR["Flux HelmReleases\n- Installation/Upgrade Configuration"]
+      FluxOCI["Flux OCIRepositories\n- Helm Chart Location\n- ODG Version"]
+      IPS2["ImagePullSecret"]
+
+      ARWODG --> KWODG
+      KWODG -->|referenced by| FluxHR
+      FluxOCI -->|referenced by| FluxHR
+      HVS -->|referenced by| FluxHR
+      IPS2 -->|referenced by| FluxOCI
+    end
+
+    subgraph fluxns["flux-system"]
+      FluxCtrl["Flux Controller"]
+    end
+
+    FluxHR -->|reconciled by| FluxCtrl
+    SP -->|reconciled by| OpenMCP
+    PCODG -->|used by| SPODG
+    SPODG -->|manages| IPS2
+    SPODG -->|manages| FluxOCI
+    SPODG -->|manages| HVS
+    SPODG -->|manages| FluxHR
+  end
+
+  subgraph Onboarding["Onboarding"]
+    subgraph projns["project-&lt;project-name&gt;--ws-&lt;workspace-name&gt;"]
+      SPAODG["ServiceProviderAPI ODG"]
+      ODGCFG["ODG Configuration"]
+      ODGSec["ODG Secrets"]
+
+      ODGCFG -->|"referenced by"| SPAODG
+      ODGSec -->|"referenced by"| SPAODG
+    end
+  end
+
+  subgraph WorkloadODG["Workload-ODG (multiple)"]
+    ODGCRDs["ODG CRDs"]
+
+    subgraph odgsys["odg-system"]
+      IPS3["ImagePullSecret"]
+      ODGComp["ODG Components\n- ODG Configuration\n- ODG Secrets"]
+    end
+  end
+
+  SPAODG -->|reconciled by| SPODG
+  SPODG -->|manages| IPS3
+  FluxCtrl -->|manages| ODGCRDs
+  FluxCtrl -->|manages| ODGComp
+```
+</details>
+
 ## API Reference
 
 ### ODG
@@ -97,9 +212,38 @@ A chart item (`spec.charts[]`) is defined as follows:
 
 ## Running E2E Tests
 
+The e2e tests spin up a full local OCP environment with four kind clusters (platform, onboarding, mcp, workload-odg) and verify the ODG deployment flow: pull secret replication, OCIRepository/HelmRelease creation, chart installation, and pod deployment to the dedicated workload cluster.
+
+### Prerequisites
+
+- Docker (8 GB+ RAM allocated)
+- Go 1.26 (not 1.27+ — the linter cannot decode Go 1.27 export data)
+- [Task](https://taskfile.dev) (`go-task`)
+- Flux CLI (installed automatically by `task install-flux`)
+
+### Running the tests
+
+The e2e test doubles as a local cluster setup. With `--keep-clusters`, the test runs normally but skips teardown, leaving the clusters alive for debugging:
+
+```shell
+PATH="$PWD/bin:$PATH" task test-e2e -- --keep-clusters
+```
+
+Without the flag, clusters are torn down after tests:
+
 ```shell
 PATH="$PWD/bin:$PATH" task test-e2e
 ```
+
+### What the test environment sets up
+
+The test framework (`main_test.go`) configures:
+
+- **`workload-odg` purpose mapping** — the scheduler doesn't know this purpose yet, so it's added via `ExtraClusterPurposeMapping` (kind, Exclusive)
+- **FluxCD extension** — installs Flux on the platform cluster during Bootstrap (before platform services), so the SP controller can create OCIRepository/HelmRelease resources
+- **Platform service gateway** — installs Envoy Gateway (including Gateway API CRDs) on `workload-odg` clusters via a `GatewayServiceConfig` with `matchPurpose: workload-odg`. Required because the ODG Helm charts include `HTTPRoute` resources
+- **Dummy pull secret** — creates a `privateregcred` secret in the SP pod namespace to test the controller's secret replication code path
+
 
 ## Quality Criteria
 
@@ -117,7 +261,6 @@ PATH="$PWD/bin:$PATH" task test-e2e
 | Ownership and maintenance docs    |   ✅    |       |
 
 See the [OpenControlPlane Quality Criteria](https://open-control-plane.io/developers/serviceprovider/quality-criteria) for definitions.
-
 
 ## Support, Feedback, Contributing
 
