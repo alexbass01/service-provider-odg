@@ -32,8 +32,8 @@ dedicated workload cluster.
 
 - **OCP is the host platform.** ODG is a plugin on top of OCP — it must be
   installable after OCP is already running, not the other way around.
-- **Same deployment mechanisms.** ODG must use OCM components, kro RGDs, and
-  Flux Kustomizations/HelmReleases — the same tooling OCP itself uses.
+- **Same deployment mechanisms.** ODG must use OCM components and Flux
+  Kustomizations/HelmReleases — the same tooling OCP itself uses.
 - **Gardener Shoot clusters.** ODG workloads run on Gardener Shoots, managed
   through OCP's cluster lifecycle. ODG does not bring its own cluster
   management.
@@ -60,7 +60,7 @@ controller deploys the ODG stack onto a dedicated workload cluster.
   vaults into Kubernetes Secrets.
 - **DNS & Certificates:** Trial — Gardener Shoot default domain; Beta —
   proper external URL with Gardener-managed DNS and certificate manager.
-- **Backup & Restore:** Trial —  self-managed DB, own backup); Beta — automated
+- **Backup & Restore:** Trial — self-managed DB, own backup; Beta — automated
   backup / manual restore with runbooks.
 - **Metering:** ODG instance usage time is tracked via OCP's metering
   infrastructure.
