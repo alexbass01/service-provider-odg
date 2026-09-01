@@ -26,9 +26,8 @@ production-grade database with backup/restore is required.
 Positive:
 
 - Trial ships without external dependencies.
+- Can use our existing backup extensian https://github.com/open-component-model/odg-core/blob/master/src/delivery_db_backup.py for the trial
 
 Negative / follow-up:
-
-- Trial has no automated backup; data loss is possible.
 - Beta requires provisioning and configuration of a managed DB, including
   backup/restore runbooks (e.g., PVC-full scenario for the migration path).

@@ -1,22 +1,22 @@
-# ADR-002: Not Running the ODG CRD on OCP ControlPlanes as DomainServiceAPI
+# ADR-002: No ODG CRD on OCP ControlPlanes as DomainServiceAPI
 
-- **Status:** Rejected
+- **Status:** Accepted
 - **Date:** 2025-08-31
 
 ## Context
 
-An alternative integration model would have been to install the existing ODG
-CRD onto OCP ControlPlanes as a DomainServiceAPI, reusing the ODG operator as
-a DomainService.
+Most other ServiceProviders install a CRD (DomainServiceAPI) on the control plane they are selected for. 
+
+Option 1: User orders control plane, installs ODG Service Provider, user created ODG config in control plane and then ODG gets instantiated with this config.
+
+Opion 2: User doesn't need need a ControlPlane for ODG, puts all settings into the onboarding cluster and ODG gets instanciated through the service provider.
+The service URL will be passed back into the onboarding cluster independent of any control planes.
 
 ## Decision
 
-Rejected. The ODG CRD is not installed on ControlPlanes; ODG instances are
-ordered through a dedicated resource on the onboarding cluster instead.
+The ODG CRD is not installed on ControlPlanes; ODG instances are ordered
+through a dedicated resource on the onboarding cluster instead.
 
-## Alternatives Considered
-
-- **DomainServiceAPI on ControlPlanes** — rejected for the reasons below.
 
 ## Consequences
 
@@ -26,9 +26,3 @@ Reasons for rejection:
   sharing between them).
 - It adds another ordering layer on top of OCP's built-in one, increasing
   complexity.
-- OCP Workspaces should be leveraged for multi-landscape setups instead.
-
-Follow-up:
-
-- The onboarding flow is owned by ODG's own controller (see
-  [ADR-0002](0002-plugin-not-serviceprovider.md)).

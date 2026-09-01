@@ -20,7 +20,7 @@ template and an optional separate Gardener project.
 - **Share existing OCP workload clusters** — rejected: no fine-tuned
   infrastructure for ODG, shared blast radius with other tenants, and no
   separate cost/access isolation.
-  Existing workload clusters are for 
+  Existing workload clusters are also designed to be stateless (i.e. state is only persisted in etcd, no databases etc.).
 
 ## Consequences
 
@@ -28,8 +28,8 @@ Positive:
 
 - Fine-tuned infrastructure without affecting OCP workload.
 - Independent tenancy scaling.
-- Separate Gardener project for access/cost/alerting isolation.
-- Independent tooling (ingress, DNS, resource manager).
+- Separate Gardener project for access/cost/alerting isolation possible.
+- Independent tooling (gateway, DNS, cert manager).
 
 Negative / follow-up:
 
