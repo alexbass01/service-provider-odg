@@ -239,7 +239,13 @@ func TestServiceProvider(t *testing.T) {
 					{"delivery-db", "app.kubernetes.io/instance", "delivery-db"},
 				}
 
+				deadline := time.Now().Add(4 * time.Minute)
 				for _, d := range expectedPods {
+					remaining := time.Until(deadline)
+					if remaining <= 0 {
+						t.Errorf("timed out waiting for pods on workload-odg cluster")
+						break
+					}
 					podList := &corev1.PodList{}
 					err := wait.For(
 						func(ctx context.Context) (bool, error) {
@@ -253,7 +259,7 @@ func TestServiceProvider(t *testing.T) {
 							}
 							return false, nil
 						},
-						wait.WithTimeout(5*time.Minute),
+						wait.WithTimeout(remaining),
 						wait.WithInterval(10*time.Second),
 					)
 					if err != nil {
