@@ -16,3 +16,4 @@ spec:
     usedForProduction: "NOT_USED_FOR_PRODUCTION" # Other supported values are "USED_FOR_PRODUCTION" and "UNSET"
   providerConfigRef:
     name: account-provider-config
+

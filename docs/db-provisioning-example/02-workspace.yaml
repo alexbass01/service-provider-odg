@@ -12,4 +12,3 @@ spec:
       name: your.email@sap.com # change that to what you are using
       roles:
         - admin
-

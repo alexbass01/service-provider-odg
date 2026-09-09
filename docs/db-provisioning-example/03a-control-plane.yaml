@@ -15,4 +15,3 @@ spec:
           roleRefs:
           - kind: ClusterRole
             name: cluster-admin
-
