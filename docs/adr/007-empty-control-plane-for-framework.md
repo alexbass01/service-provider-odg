@@ -1,14 +1,17 @@
 # ADR-007: Require an Empty ControlPlane for the ODG Service Offering (for Now)
 
-| Status   | Accepted                                      |
+| Status   | Proposed                                      |
 |----------|-----------------------------------------------|
 | Date     | 2026-09-09                                    |
 
 ## Context and Problem Statement
 
 ADR-002 established that ODG does not use a ControlPlane as its domain API —
-all ordering happens on the onboarding cluster. Architecturally, ODG therefore
-does not need a ControlPlane at all. However, the current OCP framework and
+all ordering happens on the onboarding cluster. ADR-006 further established
+that databases are provisioned centrally on an ODG-owned ControlPlane, not on
+a per-tenant one. Individual tenant ControlPlanes need neither ODG CRDs nor
+any Crossplane/BTP configuration. Architecturally, ODG therefore does not need
+a per-tenant ControlPlane at all. However, the current OCP framework and
 tooling are built around the standard service provider model, which assumes a
 ControlPlane exists and is `Ready`. We need to decide whether to work within
 that assumption or invest in a custom path now.
@@ -27,9 +30,10 @@ that assumption or invest in a custom path now.
 ## Considered Options
 
 1. **Require an empty ControlPlane** — ODG orders a ControlPlane as part of
-   its provisioning flow. The ControlPlane carries no ODG-specific CRDs; it
-   exists purely to satisfy the framework. Reuses the standard SP template,
-   UI integration, and E2E tests unchanged.
+   its provisioning flow. The ControlPlane carries no ODG-specific CRDs and no
+   Crossplane/BTP setup (databases live on the central ODG ControlPlane per
+   ADR-006); it exists purely to satisfy the framework. Reuses the standard SP
+   template, UI integration, and E2E tests unchanged.
 2. **Skip the ControlPlane entirely** — place only a CRD on the onboarding
    cluster and write a custom controller that does not depend on a ControlPlane
    being present. Requires OCP team coordination and significant upfront
@@ -58,7 +62,7 @@ Positive:
 Negative / follow-up:
 
 - Each ODG tenant gets an empty ControlPlane that serves no functional purpose
-  — minor resource overhead.
+  — no CRDs, no Crossplane, no BTP config; minor resource overhead only.
 - Revisit once the offering is stable: running without a ControlPlane would
   simplify the tenant lifecycle and reduce resource usage.
 - If OCP changes the standard SP model, this assumption may need revisiting
