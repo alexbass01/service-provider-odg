@@ -5,14 +5,12 @@ import (
 	"fmt"
 	"testing"
 
-	clustersv1alpha1 "github.com/openmcp-project/openmcp-operator/api/clusters/v1alpha1"
 	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
+
+	"github.com/openmcp-project/openmcp-testing/pkg/clusterutils"
 )
 
 // getTenantNamespace calculates the tenant namespace using the same hash function as the controller.
@@ -21,45 +19,16 @@ func getTenantNamespace(mcpName, mcpNamespace string) (string, error) {
 	return libutils.StableMCPNamespace(mcpName, mcpNamespace)
 }
 
-// getWorkloadClusterClient retrieves the workload cluster kubeconfig from the AccessRequest
-// and creates a REST config for accessing the workload cluster.
-// The AccessRequest is created by the advanced cluster access reconciler and contains
-// the kubeconfig secret reference in its status.
-func getWorkloadClusterClient(ctx context.Context, platformCfg *envconf.Config, tenantNamespace, mcpName string) (*rest.Config, error) {
-	// AccessRequest naming follows the pattern used by the advanced cluster access reconciler:
-	// providerName + "--" + objectName + requestSuffixWorkload
-	// where providerName = "odg" and requestSuffixWorkload = "--wl-odg"
-	accessRequestName := fmt.Sprintf("odg--%s--wl-odg", mcpName)
-
-	accessRequest := &clustersv1alpha1.AccessRequest{}
-	err := platformCfg.Client().Resources().Get(ctx, accessRequestName, tenantNamespace, accessRequest)
+// getWorkloadClusterConfig returns an envconf.Config for the workload-odg cluster.
+// It uses the kind provider directly (127.0.0.1) rather than the kubeconfig stored
+// in the AccessRequest secret (which contains the Docker-internal IP and is unreachable
+// from the test process both locally and in GitHub Actions).
+func getWorkloadClusterConfig() (*envconf.Config, error) {
+	cfg, err := clusterutils.ConfigByPrefix("workload-odg", "odg-system")
 	if err != nil {
-		return nil, fmt.Errorf("failed to get AccessRequest %s/%s: %w", tenantNamespace, accessRequestName, err)
+		return nil, fmt.Errorf("failed to get workload-odg cluster config: %w", err)
 	}
-
-	if accessRequest.Status.SecretRef == nil {
-		return nil, fmt.Errorf("AccessRequest %s/%s has no SecretRef in status", tenantNamespace, accessRequestName)
-	}
-
-	// Get the secret containing the kubeconfig
-	secret := &corev1.Secret{}
-	err = platformCfg.Client().Resources().Get(ctx, accessRequest.Status.SecretRef.Name, tenantNamespace, secret)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get kubeconfig secret %s/%s: %w", tenantNamespace, accessRequest.Status.SecretRef.Name, err)
-	}
-
-	kubeconfigData, ok := secret.Data["kubeconfig"]
-	if !ok {
-		return nil, fmt.Errorf("secret %s/%s does not contain kubeconfig key", tenantNamespace, accessRequest.Status.SecretRef.Name)
-	}
-
-	// Parse kubeconfig and create REST config
-	restConfig, err := clientcmd.RESTConfigFromKubeConfig(kubeconfigData)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse kubeconfig: %w", err)
-	}
-
-	return restConfig, nil
+	return cfg, nil
 }
 
 const (

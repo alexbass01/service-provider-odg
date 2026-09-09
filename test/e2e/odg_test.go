@@ -9,6 +9,7 @@ import (
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -216,6 +217,70 @@ func TestServiceProvider(t *testing.T) {
 					}
 					return keys
 				}())
+				return ctx
+			},
+		).
+		Assess("verify pods are running on workload-odg cluster",
+			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				workloadCfg, err := getWorkloadClusterConfig()
+				if err != nil {
+					t.Errorf("failed to get workload-odg cluster config: %v", err)
+					return ctx
+				}
+
+				expectedPods := []struct {
+					name       string
+					labelKey   string
+					labelValue string
+				}{
+					{"backlog-controller", "app", "backlog-controller"},
+					{"delivery-dashboard", "app", "delivery-dashboard"},
+					{"delivery-service", "app", "delivery-service"},
+					{"delivery-db", "app.kubernetes.io/instance", "delivery-db"},
+				}
+
+				for _, d := range expectedPods {
+					podList := &corev1.PodList{}
+					err := wait.For(
+						func(ctx context.Context) (bool, error) {
+							if err := workloadCfg.Client().Resources().WithNamespace("odg-system").List(ctx, podList); err != nil {
+								return false, nil
+							}
+							for _, pod := range podList.Items {
+								if pod.Labels[d.labelKey] == d.labelValue && pod.Status.Phase == corev1.PodRunning {
+									return true, nil
+								}
+							}
+							return false, nil
+						},
+						wait.WithTimeout(5*time.Minute),
+						wait.WithInterval(10*time.Second),
+					)
+					if err != nil {
+						t.Errorf("pod %q not Running in odg-system on workload-odg cluster", d.name)
+					} else {
+						t.Logf("pod %q is Running on workload-odg cluster", d.name)
+					}
+				}
+				return ctx
+			},
+		).
+		Assess("verify cronjobs exist on workload-odg cluster",
+			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
+				workloadCfg, err := getWorkloadClusterConfig()
+				if err != nil {
+					t.Errorf("failed to get workload-odg cluster config: %v", err)
+					return ctx
+				}
+
+				for _, name := range []string{"artefact-enumerator", "cache-manager"} {
+					cronJob := &batchv1.CronJob{}
+					if err := workloadCfg.Client().Resources().WithNamespace("odg-system").Get(ctx, name, "odg-system", cronJob); err != nil {
+						t.Errorf("CronJob %q not found in odg-system on workload-odg cluster: %v", name, err)
+					} else {
+						t.Logf("CronJob %q exists on workload-odg cluster", name)
+					}
+				}
 				return ctx
 			},
 		).
