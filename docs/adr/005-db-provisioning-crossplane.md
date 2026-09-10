@@ -47,4 +47,4 @@ Negative / follow-up:
 - **Status propagation bug observed** — in testing, the BTP instance reached
   `Ready` in BTP but never transitioned to `Ready` in Kubernetes; credential
   binding (the final step) did not complete. Needs a bug report / version
-  upgrade before Beta.
+  upgrade before Beta. So might also not be a completely smooth ride.
