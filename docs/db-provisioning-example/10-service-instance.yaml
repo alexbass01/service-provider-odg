@@ -33,7 +33,7 @@ spec:
       region: eu-central-1
       storage: 5
       public_access: true 
-  writeConnectionSecretToRef: 
+  writeConnectionSecretToRef:  # did not work for me, but may be working later (see timeout problem in README.md)
     name: postgres-hyperscaler-credentials1
     namespace: default
   providerConfigRef:

@@ -35,8 +35,29 @@ for steps 5–10.
 - **Status propagation bug** — in testing, the BTP instance reached `Ready` in
   BTP but the Kubernetes `ServiceInstance` never transitioned to `Ready`,
   leaving credential binding incomplete. Check the provider version and events
-  if this happens.
+  if this happens. See note below
 - **AWS RDS port** — RDS uses a non-standard port; use the port from the
   connection secret rather than assuming 5432.
 - **SCI / Cloud Foundry connectivity** — network access from a workload cluster
   to a CF-hosted database is unresolved; a jump host or proxy may be needed.
+
+## Note on "status propagation bug"
+Currently, the default timeout for a successful resource creation it 10 minutes.
+In a soon after writing (Sept. 10, 2026) to be released v2 version, this will be configurable:
+https://github.com/SAP/crossplane-provider-btp/pull/699
+Amazon RDS takes about 20 minutes to be created an even more than 10 minutes to just update a firewall rule.
+Thus the external ID annotation never gets set and a successful sync doesn't happen.
+
+When revisiting this task, make sure to set a long timeout.
+
+To manually fix a stuck deployment, you have to add the instance uuid manually as an annotation to the ServiceInstance CR.
+See https://sap.github.io/crossplane-provider-docs/docs/crossplane-provider-btp/docs/end-user-guides/import-landscape/overview#manual-external-name-annotation
+
+```
+metadata:
+  annotations:
+    crossplane.io/external-name: <resource-id>
+```
+
+There is an option in the Service instance to create connection credentials as well, but for me that did not work  - maybe due to the same bug.
+Thus I created a ServiceBinding manually. Ideally, this will not be necessary in the future.
