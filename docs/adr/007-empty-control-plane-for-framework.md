@@ -21,8 +21,7 @@ that assumption or invest in a custom path now.
 * **Framework fit**: the standard OCP service provider template, E2E test
   suite, and UI visibility all require a ControlPlane to be present and `Ready`.
 * **Time to delivery**: writing a custom controller to bypass the ControlPlane
-  requirement is non-trivial and would need alignment with the OCP team
-  (Christopher).
+  requirement is non-trivial and would need alignment with the OCP team.
 * **Architectural cleanliness**: from a pure architecture standpoint, ODG
   could run with just a CRD on the onboarding cluster — no ControlPlane needed.
   This is a viable future state, not the current one.
