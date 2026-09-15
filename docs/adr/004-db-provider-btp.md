@@ -6,15 +6,11 @@
 
 ## Context and Problem Statement
 
-ODG Beta requires a production-grade managed database. The platform runs
-across multiple SAP environments, cloud providers, and regions. We need a
-managed Postgres offering that works across all of them without us operating
-infrastructure credentials per hyperscaler.
+ODG will need a means to request and consume production-grade Postgres managed databases at some point.
 
 ## Decision Drivers
 
-* **Multi-environment coverage**: must work on AWS, Azure, Google Cloud, and
-  SAP sub-cloud (SCI).
+* **Multi-environment coverage**: must work accross different environments, consuming a database URL via connection string.
 * **No DIY infrastructure**: we should not manage cloud-provider accounts,
   keys, or backup configurations ourselves.
 * **Operational simplicity**: provisioning, backups, audit logging and upgrades should be
@@ -26,6 +22,7 @@ infrastructure credentials per hyperscaler.
    Flexible Server, AWS RDS, etc.) and SAP's own SCI via Cloud Foundry.
 2. **Own hyperscaler accounts** — provision Postgres directly in each
    hyperscaler using our own credentials per region/provider.
+3. **Self-hosting** — provision Postgres directly in each ODG deployment.
 
 ## Decision Outcome
 
@@ -33,13 +30,17 @@ Chosen option: **"SAP BTP"**, because it abstracts away per-hyperscaler
 account management and covers all target environments from a single control
 plane.
 
+
 ## Consequences
 
 Positive:
 
-- Single provisioning API across AWS, Azure, GCP, and SCI.
+- Single provisioning API across different cloud environments
 - Hyperscaler-native services under the hood (RDS, Flexible Server, etc.) —
   no custom backup/HA needed.
+- Through the connection string parameter it will be possible for
+  everyone who wants to run this software on their own cluster to pick whatever
+  option they prefer and run it even with a self-hosted Postgres.
 
 Negative / follow-up:
 

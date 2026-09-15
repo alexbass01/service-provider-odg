@@ -8,7 +8,7 @@ metadata:
     openmcp.cloud/display-name: Cloud Orchestrator IaD setup
   labels:
     openmcp.cloud.sap/charging-target-type: btp   ## Mandatory
-    openmcp.cloud.sap/charging-target: "8b7fcd40...f1a7c7ce9566"  ## Mandatory, it's from the URL e.g. https://canary.cockpit.btp.int.sap/cockpit#/globalaccount/8b7fcd40-...-f1a7c7ce9566
+    openmcp.cloud.sap/charging-target: "8b7fcd40...f1a7c7ce9566"  ## Mandatory, it's from the BTP URL
 spec:
   members:
     - kind: User

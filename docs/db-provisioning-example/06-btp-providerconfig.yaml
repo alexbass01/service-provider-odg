@@ -5,7 +5,7 @@ metadata:
     name: account-provider-config
 spec:
     globalAccount: 8b7fcd40-...-f1a7c7ce9566
-    cliServerUrl: https://canary.cli.btp.int.sap # https://cli.btp.cloud.sap
+    cliServerUrl: <BTP CLI URL> # Enter here
     cisCredentials:
         secretRef:
             name: cis-provider-secret

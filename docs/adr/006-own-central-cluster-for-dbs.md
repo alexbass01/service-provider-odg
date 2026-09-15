@@ -65,7 +65,7 @@ Positive (central cluster):
 
 Negative / follow-up:
 
-- Database redentials must be propagated from the central ControlPlane to each ODG
+- Database credentials must be propagated from the central ControlPlane to each ODG
   workload cluster — a cross-cluster secret distribution mechanism is needed 
   (but I think available and needed with any option)
 - Customer has no access to the database.

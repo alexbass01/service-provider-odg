@@ -1,5 +1,4 @@
 # Order Crossplane for your control plane on the onboarding cluster
-# You can find suitable versions https://pages.github.tools.sap/cloud-orchestration/docs/managed-control-planes/features/overview?landscape=mcpv2-canary on Canary V2
 apiVersion: crossplane.services.open-control-plane.io/v1alpha1
 kind: Crossplane
 metadata:
