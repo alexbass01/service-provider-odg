@@ -21,6 +21,7 @@ tasks:
   install-flux:
     desc: "Install Flux CLI for e2e tests"
     vars:
+      # renovate: datasource=github-releases depName=fluxcd/flux2
       FLUX_VERSION: v2.9.4
       FLUX_BINARY: '{{.ROOT_DIR}}/bin/flux'
     status:
