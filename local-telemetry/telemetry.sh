@@ -38,7 +38,7 @@ cmd_up() {
   say "1/4  backends (Docker)"
   docker compose -f "$HERE/compose.yml" up -d
 
-  say "2/4  waiting for opensearch (:9200) + prometheus (:9090)"
+  say "2/5  waiting for opensearch (:9200) + prometheus (:9090)"
   local ok=0
   for _ in $(seq 1 60); do
     curl -s -o /dev/null localhost:9200 \
@@ -48,9 +48,22 @@ cmd_up() {
   done
   [ $ok -eq 1 ] || { echo "ERROR: backends not ready after 2m. docker compose -f $HERE/compose.yml logs"; exit 1; }
 
+  # Create the OpenSearch data view (index pattern) so Discover works out of the box.
+  say "3/5  waiting for dashboards (:5601) + create 'logs-otel-v1' data view"
+  ok=0
+  for _ in $(seq 1 90); do
+    if curl -s -o /dev/null -w '%{http_code}' \
+      -X POST 'localhost:5601/api/saved_objects/index-pattern/logs-otel-v1?overwrite=true' \
+      -H 'osd-xsrf: true' -H 'Content-Type: application/json' \
+      -d '{"attributes":{"title":"logs-otel-v1","timeFieldName":"@timestamp","name":"otel logs"}}' \
+      | grep -q '^2'; then ok=1; break; fi
+    sleep 2
+  done
+  [ $ok -eq 1 ] || echo "WARN: dashboards not ready — data view not created (do it manually in OS Dashboards)"
+
   find_kubeconfig
 
-  say "3/4  helm install metrics-operator + collector  namespace=$NS"
+  say "4/5  helm install metrics-operator + collector  namespace=$NS"
   K create namespace "$NS" --dry-run=client -o yaml | K apply -f -
   helm upgrade --install metrics-operator-local \
     oci://ghcr.io/openmcp-project/charts/metrics-operator --version v1.2.0 \
@@ -60,7 +73,7 @@ cmd_up() {
     oci://ghcr.io/open-telemetry/opentelemetry-helm-charts/opentelemetry-collector --version 0.139.0 \
     -f "$HERE/collector-values.yaml" -n "$NS" --kubeconfig="$KUBECONFIG_FILE" --wait --timeout 5m || exit 1
 
-  say "4/4  apply DataSink + Metric CRs"
+  say "5/5  apply DataSink + Metric CRs"
   K apply -f "$HERE/metrics-operator-cr.yaml" || exit 1
 
   say "opening port-forward :8889 -> collector :8889 (for Prometheus scrape)"
@@ -68,33 +81,24 @@ cmd_up() {
   pkill -f 'port-forward pod/.*8889:8889' 2>/dev/null || true
   # the collector daemonset pod must be Ready before pf binds, else pf exits immediately
   K rollout status ds/otel-collector-local-agent -n "$NS" --timeout=120s || { echo "ERROR: collector not ready"; exit 1; }
-  # port-forward the POD (8889 isn't on the Service). Restart loop: pf dies on conn reset.
-  local pod
-  pod=$(K get pod -n "$NS" -l app.kubernetes.io/name=opentelemetry-collector -o jsonpath='{.items[0].metadata.name}')
-  nohup bash -c 'while true; do
-    kubectl --kubeconfig="'"$KUBECONFIG_FILE"'" -n '"$NS"' port-forward pod/'"$pod"' 8889:8889 >>/tmp/pf-otel-metrics.log 2>&1
-    sleep 1
-  done' >/dev/null 2>&1 &
-  disown
-  sleep 3
-  lsof -i tcp:8889 >/dev/null 2>&1 || { echo "ERROR: port-forward failed to bind :8889 — see /tmp/pf-otel-metrics.log"; exit 1; }
+  bind_pf
 
   echo
   cat <<'EOF'
 
   UP ✓   (no logins anywhere — security plugins disabled)
 
-  METRICS — http://localhost:9090
-    Graph tab, type:
-      odg_pods_running                      # ~21 odg-system pods, value 1 each
-      system_cpu_utilization_ratio          # host metrics
+  METRICS — http://localhost:9090  (Graph tab)
+    grouping / rollup queries:
+      count(odg_pods_running)                                   # total pods in odg-system
+      count by (pod)(odg_pods_running)                          # one line per pod
+      avg(system_cpu_utilization_ratio{state="user"})            # mean CPU % across cores
+      avg by (cpu)(system_cpu_utilization_ratio)                # one line per core
     Status -> Targets: 'otel-collector' should be UP
-    filter labels: pod, resource_namespace, deployment
 
-  LOGS — http://localhost:5601   (OpenSearch Dashboards, no password)
-    one-time setup:  menu -> Management -> Dashboards Management -> Index patterns
-                     -> Create -> name 'logs-otel-v1' -> time field '@timestamp'
-    then menu -> Discover, pick 'logs-otel-v1'. Filters:
+  LOGS — http://localhost:5601   (OS Dashboards, no password)
+    data view 'logs-otel-v1' is pre-created — just open menu -> Discover.
+    filters:
       resource.k8s.deployment.name: "delivery-service"
       resource.k8s.pod.name: "otel-collector-*"
       body: "ERROR"
@@ -116,7 +120,7 @@ cmd_down() {
     KUBECONFIG_FILE=/tmp/odg-telemetry-wl.kubeconfig
     K delete -f "$HERE/metrics-operator-cr.yaml" --ignore-not-found
     helm uninstall otel-collector-local metrics-operator-local -n "$NS" --kubeconfig="$KUBECONFIG_FILE" 2>/dev/null || true
-    pkill -f 'port-forward pod/.*8889:8889' 2>/dev/null || true
+    pkill -f '8889:8889' 2>/dev/null || true
   else
     say "no workload cluster found — skipping cluster teardown"
   fi
@@ -152,8 +156,32 @@ cmd_reset() {
   cmd_up
 }
 
+# (re)bind :8889 to the current collector pod. Resolves the pod by label each loop-iteration,
+# so if the daemonset pod is recreated the forward follows it automatically.
+bind_pf() {
+  pkill -f '8889:8889' 2>/dev/null || true; sleep 1
+  nohup bash -c '
+    K=/tmp/odg-telemetry-wl.kubeconfig
+    while true; do
+      pod=$(kubectl --kubeconfig="$K" -n telemetry-local get pod -l app.kubernetes.io/name=opentelemetry-collector --field-selector=status.phase=Running -o jsonpath="{.items[0].metadata.name}" 2>/dev/null)
+      if [ -n "$pod" ]; then
+        kubectl --kubeconfig="$K" -n telemetry-local port-forward "pod/$pod" 8889:8889 >>/tmp/pf-otel-metrics.log 2>&1
+      fi
+      sleep 2
+    done' >/dev/null 2>&1 &
+  disown
+  sleep 3
+  lsof -i tcp:8889 >/dev/null 2>&1 || echo "WARN: :8889 not bound yet — the loop keeps retrying"
+}
+
+cmd_restart() {
+  cmd_down   # tears down cluster releases + CRs + port-forward + backends
+  cmd_up     # reinstalls everything + rebinds the (self-healing) port-forward
+}
+
 case "${1:-}" in
   up)     cmd_up ;;
+  restart) cmd_restart ;;
   down)   cmd_down ;;
   status) cmd_status ;;
   reset)  cmd_reset ;;

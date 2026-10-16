@@ -23,7 +23,7 @@ the collector (`:4317`); the collector re-exports them on `:8889`.
 
 ```bash
 cd local-telemetry
-./telemetry.sh up       # start backends + install collector/metrics-operator + apply CRs
+./telemetry.sh up       # start backends + install collector/metrics-operator + apply CRs + data view
 ./telemetry.sh status   # is anything up?
 ./telemetry.sh down     # remove collector/CRs, stop backends (data kept)
 ./telemetry.sh reset    # wipe all data, start fresh
@@ -34,17 +34,49 @@ cd local-telemetry
 `task test-e2e -- --keep-clusters` must have run and still be alive (kubeconfig is auto-discovered
 from `kind get clusters`).
 
+## Prometheus — grouping queries
+
+Raw `odg_pods_running` returns one series per pod (~26). Group to make it readable.
+Paste into the **Graph** tab at http://localhost:9090:
+
+| Query | Result |
+|---|---|
+| `count(odg_pods_running)` | one number: total pods in odg-system |
+| `count by (pod)(odg_pods_running)` | one line per pod |
+| `sum by (pod)(odg_pods_running)` | pods, summed (here still 1 each) |
+
+Host metrics come per-CPU-core (`cpu` label). Avg/max to collapse:
+
+| Query | Result |
+|---|---|
+| `avg(system_cpu_utilization_ratio{state="user"})` | mean user-CPU across cores |
+| `max(system_cpu_utilization_ratio)` | hottest core % |
+| `avg by (cpu)(system_cpu_utilization_ratio)` | one line per core |
+| `avg(system_memory_utilization_ratio)` | host memory usage ratio |
+
+## Dashboards — data view auto-created
+
+`up` pre-creates the **`logs-otel-v1`** data view (index pattern, time field `@timestamp`) via the
+OpenSearch Dashboards API — no manual setup. Just open http://localhost:5601 → menu ☰ → **Discover**
+and pick `logs-otel-v1`.
+
+Useful filters (search bar):
+- `resource.k8s.deployment.name: "delivery-service"` — one component
+- `resource.k8s.pod.name: "otel-collector-*"` — collector's own logs
+- `body: "ERROR"` — error lines
+
+Fields available: `resource.k8s.{namespace,pod,deployment,container}.name`, `body`, `@timestamp`.
+
+Raw API (no UI): `curl -s localhost:9200/logs-otel-v1/_search`
+
 ## Verify data lands
 
-- Prometheus: http://localhost:9090 → **Status → Targets** shows `otel-collector (localhost:8889)` **UP**
-  once the port-forward is live. Metric series (e.g. `odg_pods_running`, `system_cpu_utilization_ratio`)
-  appear in **Graph** within ~1 min of `up`.
-- Dashboards: http://localhost:5601 (no login) → **Dev Tools** → `GET logs-otel-v1/_search`
+- Prometheus: http://localhost:9090 → **Status → Targets** shows `otel-collector` **UP**
+  once the port-forward is live. Series appear in **Graph** within ~1 min of `up`.
+- Dashboards Discover (`logs-otel-v1`) shows logs within ~30s of `up`.
 
 ## Notes
 
-- Logs are only collected from pods annotated `otel.io/pod-logs: "true"` in `odg-system`
-  (see `collector-values.yaml` → `filter/only_annotated`). Annotate a workload to opt it in:
-  `kubectl -n odg-system annotate pod <pod> otel.io/pod-logs=true --overwrite`
+- Log scope = pods in `odg-system` only (filelog `include` glob + k8sattributes namespace filter).
 - Backends run with security disabled (lab mode). SAP/BTP production uses mTLS — see
   `~/code/discussions/12-otel/04-btp-metrics-view.md`.
