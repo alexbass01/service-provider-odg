@@ -75,6 +75,21 @@ Raw API (no UI): `curl -s localhost:9200/logs-otel-v1/_search`
   once the port-forward is live. Series appear in **Graph** within ~1 min of `up`.
 - Dashboards Discover (`logs-otel-v1`) shows logs within ~30s of `up`.
 
+## Verify each hop of the metric pipeline
+
+Path: `Metric / ManagedMetric CR` → metrics-operator evaluates + builds OTLP → pushes to
+collector `:4317` → collector serves on `:8889` → Prometheus scrapes.
+
+| # | Check | Command |
+|---|---|---|
+| 1 | CR Ready + has a value (operator evaluated the query) | `kubectl --kubeconfig=/tmp/odg-telemetry-wl.kubeconfig -n telemetry-local get metric odg-pods-running` — expect `READY=True VALUE=<n>` |
+| 2 | operator exports without errors | `kubectl --kubeconfig=/tmp/odg-telemetry-wl.kubeconfig -n telemetry-local logs deploy/metrics-operator-local \| grep -i "failed to export"` — expect no output |
+| 3 | collector serves the metric on :8889 | `curl -s localhost:8889/metrics \| grep odg_pods_running` — expect series lines |
+| 4 | Prometheus scraped it | Graph tab → `odg_pods_running` — expect values per pod |
+
+ManagedMetrics (created during e2e for the MCP) verify the same way:
+`kubectl get managedmetrics.metrics.open-control-plane.io -A`.
+
 ## Notes
 
 - Log scope = pods in `odg-system` only (filelog `include` glob + k8sattributes namespace filter).

@@ -89,9 +89,11 @@ cmd_up() {
   UP ✓   (no logins anywhere — security plugins disabled)
 
   METRICS — http://localhost:9090  (Graph tab)
-    grouping / rollup queries:
+    metrics-operator metric (from Metric CR 'odg-pods-running', pushed via OTLP):
+      odg_pods_running                                          # one line per pod
       count(odg_pods_running)                                   # total pods in odg-system
-      count by (pod)(odg_pods_running)                          # one line per pod
+      count by (pod)(odg_pods_running)                          # one line per pod label
+    grouping / rollup (host metrics):
       avg(system_cpu_utilization_ratio{state="user"})            # mean CPU % across cores
       avg by (cpu)(system_cpu_utilization_ratio)                # one line per core
     Status -> Targets: 'otel-collector' should be UP
