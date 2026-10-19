@@ -91,10 +91,52 @@ spec:
         mediaType: application/vnd.cncf.helm.chart.content.v1.tar+gzip
         operation: extract
       helmValues:
+        # Open OTLP/prometheus endpoints to in-cluster traffic. ODG's bootstrapping chart
+        # ships a namespace-wide default-deny NetworkPolicy, so the collector cannot be
+        # reached from other pods unless we explicitly allow it.
+        extraManifests:
+          - apiVersion: networking.k8s.io/v1
+            kind: NetworkPolicy
+            metadata:
+              name: allow-ingress-to-otel-collector
+            spec:
+              podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: opentelemetry-collector
+              policyTypes: [Ingress]
+              ingress:
+                - ports:
+                    - { port: 4317, protocol: TCP }
+                    - { port: 4318, protocol: TCP }
+                    - { port: 8889, protocol: TCP }
+          - apiVersion: networking.k8s.io/v1
+            kind: NetworkPolicy
+            metadata:
+              name: allow-egress-from-otel-collector
+            spec:
+              podSelector:
+                matchLabels:
+                  app.kubernetes.io/name: opentelemetry-collector
+              policyTypes: [Egress]
+              egress:
+                - {}
         mode: daemonset
         fullnameOverride: otel-collector
         image:
           repository: otel/opentelemetry-collector-contrib
+        # daemonset mode + helm chart creates a ClusterIP Service for OTLP/HTTP so that
+        # in-cluster clients (e.g. metrics-operator DataSink) can push to :4317.
+        service:
+          enabled: true
+        # drop hostPort bindings — with kindnet they bypass kube-proxy, breaking
+        # pod -> collector communication inside the cluster. ClusterIP Service is enough.
+        ports:
+          otlp:
+            enabled: true
+            hostPort: 0
+          otlp-http:
+            enabled: true
+            hostPort: 0
         clusterRole:
           create: true
           # chart creates an empty ClusterRole when no preset needs one; k8s_attributes

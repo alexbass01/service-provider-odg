@@ -234,6 +234,11 @@ func (r *ODGReconciler) reconcileChart(ctx context.Context, svcobj *apiv1alpha1.
 		}
 	}
 
+	helmValues, err = r.mergeChartValuesFrom(ctx, chart, helmValues)
+	if err != nil {
+		return nil, fmt.Errorf("failed to merge helmValuesFrom for chart %q: %w", chart.ChartName, err)
+	}
+
 	if helmValues != nil {
 		// helmValues.Raw is JSON; encoding/json HTML-escapes < and > to literal \u003c/\u003e.
 		// Use raw string literals so Go does not re-interpret the backslash sequences.
@@ -901,6 +906,67 @@ func (r *ODGReconciler) mergeODGConfiguration(ctx context.Context, base *apiexte
 	}
 
 	return result, nil
+}
+
+// mergeChartValuesFrom merges ConfigMap/Secret values listed in chart.HelmValuesFrom
+// on top of base for any chart. Sources are read from the controller's pod namespace
+// on the platform cluster and merged in list order (later wins on leaf conflicts).
+func (r *ODGReconciler) mergeChartValuesFrom(ctx context.Context, chart apiv1alpha1.ODGChart, base *apiextensionsv1.JSON) (*apiextensionsv1.JSON, error) {
+	result := base
+	for i, src := range chart.HelmValuesFrom {
+		overlay, refDesc, err := r.loadValuesSource(ctx, src)
+		if err != nil {
+			return nil, fmt.Errorf("helmValuesFrom[%d] %s: %w", i, refDesc, err)
+		}
+		if overlay == nil {
+			// optional and not found
+			continue
+		}
+		if result, err = mergeHelmValues(result, overlay); err != nil {
+			return nil, fmt.Errorf("helmValuesFrom[%d] %s: %w", i, refDesc, err)
+		}
+	}
+	return result, nil
+}
+
+// loadValuesSource resolves one HelmValuesFrom entry to its overlay JSON. Returns
+// (nil, refDesc, nil) when the reference is optional and the object is missing.
+func (r *ODGReconciler) loadValuesSource(ctx context.Context, src apiv1alpha1.ValuesSource) (*apiextensionsv1.JSON, string, error) {
+	kind := src.Kind
+	if kind == "" {
+		kind = "ConfigMap"
+	}
+	ref := fmt.Sprintf("%s/%s", kind, src.Name)
+
+	var data []byte
+	var err error
+	switch kind {
+	case "ConfigMap":
+		cm := &corev1.ConfigMap{}
+		if err = r.PlatformCluster.Client().Get(ctx, client.ObjectKey{Name: src.Name, Namespace: r.PodNamespace}, cm); err == nil {
+			data = []byte(cm.Data["values.yaml"])
+		}
+	case "Secret":
+		sec := &corev1.Secret{}
+		if err = r.PlatformCluster.Client().Get(ctx, client.ObjectKey{Name: src.Name, Namespace: r.PodNamespace}, sec); err == nil {
+			data = sec.Data["values.yaml"]
+		}
+	default:
+		return nil, ref, fmt.Errorf("unsupported kind %q", kind)
+	}
+
+	if err != nil {
+		if apierrors.IsNotFound(err) && src.Optional {
+			return nil, ref, nil
+		}
+		return nil, ref, fmt.Errorf("get: %w", err)
+	}
+
+	overlay, err := dataToJSON(data)
+	if err != nil {
+		return nil, ref, fmt.Errorf("values.yaml: %w", err)
+	}
+	return overlay, ref, nil
 }
 
 // dataToJSON converts raw YAML or JSON bytes to canonical JSON for merging.

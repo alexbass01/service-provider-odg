@@ -1,22 +1,24 @@
 # Metrics-operator configuration: which ODG resources to count and where to push.
-# Used by: telemetry.sh metrics   (kubectl apply -f this file)
+# Used by: telemetry.sh up   (kubectl apply -f this file)
 #
-# The operator watches the target resources, evaluates the gauge, and pushes OTLP
-# to the collector (grpc :4317), which re-exports to Prometheus via remote-write.
+# Applied into odg-system — same namespace as the e2e-installed metrics-operator and
+# otel-collector. DataSink targets the e2e collector's in-cluster service; the
+# collector exports to Prometheus via the prometheus exporter on :8889, plus
+# opensearch for logs (exporter added via the ProviderConfig helmValuesFrom merge).
 apiVersion: metrics.open-control-plane.io/v1alpha1
 kind: DataSink
 metadata:
   name: default
-  namespace: telemetry-local
+  namespace: odg-system
 spec:
   connection:
-    endpoint: "grpc://otel-collector-local.telemetry-local.svc.cluster.local:4317"
+    endpoint: "grpc://otel-collector.odg-system.svc.cluster.local:4317"
 ---
 apiVersion: metrics.open-control-plane.io/v1alpha1
 kind: Metric
 metadata:
   name: odg-pods-running
-  namespace: telemetry-local
+  namespace: odg-system
 spec:
   name: odg_pods_running
   description: Count of Running pods in odg-system

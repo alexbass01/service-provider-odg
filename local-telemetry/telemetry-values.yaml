@@ -1,0 +1,30 @@
+# Values overlay merged on top of the otel-collector chart's base values by the
+# service-provider controller (via ProviderConfig.spec.charts[].helmValuesFrom).
+#
+# Adds the exporters and pipeline changes needed to push telemetry out of the
+# workload cluster to the local backends on the developer's Mac:
+#   - opensearch (logs + traces) → host.docker.internal:9200
+#   - Prometheus scrape endpoint stays on :8889 (also exposed via port-forward)
+#
+# Applied by telemetry.sh as a ConfigMap named "telemetry-values" in the
+# controller's namespace (openmcp-system) on the platform cluster.
+
+config:
+  exporters:
+    opensearch:
+      http:
+        endpoint: "http://host.docker.internal:9200"
+      logs_index: logs-otel-v1
+      traces_index: traces-otel-v1
+  service:
+    pipelines:
+      logs:
+        receivers: [file_log]
+        # filter/only_annotated is removed for local dev — we want all odg-system logs,
+        # not only pods explicitly annotated otel.io/pod-logs=true
+        processors: [memory_limiter, k8s_attributes, batch]
+        exporters: [debug, opensearch]
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, batch]
+        exporters: [debug, opensearch]

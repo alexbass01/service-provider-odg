@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	libutils "github.com/openmcp-project/openmcp-operator/lib/utils"
+	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
@@ -93,5 +95,36 @@ func cleanupStuckGatewayFinalizers(ctx context.Context, t *testing.T, c *envconf
 		if err := c.Client().Resources().Update(ctx, &arList.Items[i]); err != nil {
 			t.Logf("failed to update AccessRequest %s/%s: %v", namespace, arList.Items[i].GetName(), err)
 		}
+	}
+}
+
+// telemetryNetworkPolicies returns the NetworkPolicies the e2e needs on the
+// workload-odg cluster's odg-system namespace so that the metrics-operator and
+// otel-collector can talk to each other.
+//
+// ODG's bootstrapping chart ships a namespace-wide default-deny NetworkPolicy;
+// without these allows, in-cluster traffic to the collector is dropped.
+//
+// The otel-collector chart itself renders its own ingress/egress policies via
+// extraManifests (see test/e2e/platform/providerconfig.yaml). The metrics-operator
+// chart does not support extraManifests, so we ship its egress policy here.
+// Once https://github.com/openmcp-project/metrics-operator supports NetworkPolicy
+// via its chart values, this helper can be removed.
+func telemetryNetworkPolicies() []*networkingv1.NetworkPolicy {
+	allowAll := networkingv1.NetworkPolicyEgressRule{}
+	return []*networkingv1.NetworkPolicy{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "allow-egress-from-metrics-operator",
+				Namespace: "odg-system",
+			},
+			Spec: networkingv1.NetworkPolicySpec{
+				PodSelector: metav1.LabelSelector{
+					MatchLabels: map[string]string{"app.kubernetes.io/name": "metrics-operator"},
+				},
+				PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
+				Egress:      []networkingv1.NetworkPolicyEgressRule{allowAll},
+			},
+		},
 	}
 }

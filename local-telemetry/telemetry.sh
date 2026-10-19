@@ -11,9 +11,17 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Our own namespace, distinct from the e2e ProviderConfig releases in odg-system.
-NS=telemetry-local
+# Namespace on the workload cluster where odg components (incl. otel-collector) live.
 OBSERVED_NS=odg-system
+# Namespace on the platform cluster where the service-provider-odg controller runs.
+CONTROLLER_NS=openmcp-system
+# ConfigMap name in CONTROLLER_NS carrying the values overlay.
+VALUES_CM=telemetry-values
+# Chart name in the ProviderConfig that we attach the overlay to.
+CHART=otel-collector
+# FQ resource name — both openmcp and odg define "providerconfigs" CRDs on platform;
+# kubectl would otherwise pick the wrong one.
+PC_RESOURCE=providerconfigs.odg.services.open-control-plane.io
 
 need() { command -v "$1" >/dev/null || { echo "ERROR: $1 not found in PATH"; exit 1; }; }
 need docker; need helm; need kubectl; need curl
@@ -21,18 +29,37 @@ need docker; need helm; need kubectl; need curl
 say() { echo "▸ $*"; }
 
 # ─── locate the kind workload cluster ────────────────────────────────────────
-find_kubeconfig() {
-  local name
-  name=$(kind get clusters 2>/dev/null | grep '^workload-odg' | head -1 || true)
-  [ -n "$name" ] || { echo "ERROR: no kind cluster named workload-odg* — run: task test-e2e -- --keep-clusters"; exit 1; }
-  kind get kubeconfig --name "$name" > /tmp/odg-telemetry-wl.kubeconfig || exit 1
+find_kubeconfigs() {
+  local wl plat
+  wl=$(kind get clusters 2>/dev/null | grep '^workload-odg' | head -1 || true)
+  plat=$(kind get clusters 2>/dev/null | grep '^platform' | head -1 || true)
+  [ -n "$wl" ]   || { echo "ERROR: no kind cluster named workload-odg* — run: task test-e2e -- --keep-clusters"; exit 1; }
+  [ -n "$plat" ] || { echo "ERROR: no kind cluster named platform* — run: task test-e2e -- --keep-clusters"; exit 1; }
+  kind get kubeconfig --name "$wl"   > /tmp/odg-telemetry-wl.kubeconfig || exit 1
+  kind get kubeconfig --name "$plat" > /tmp/odg-telemetry-plat.kubeconfig || exit 1
   KUBECONFIG_FILE=/tmp/odg-telemetry-wl.kubeconfig
+  PLATFORM_KUBECONFIG=/tmp/odg-telemetry-plat.kubeconfig
   if ! kubectl --kubeconfig="$KUBECONFIG_FILE" get nodes >/dev/null 2>&1; then
-    echo "ERROR: found cluster '$name' but it's not reachable. Still running? Then re-run task test-e2e."; exit 1
+    echo "ERROR: workload cluster '$wl' not reachable. Still running? Then re-run task test-e2e."; exit 1
   fi
-  say "workload cluster: $name"
+  if ! kubectl --kubeconfig="$PLATFORM_KUBECONFIG" get nodes >/dev/null 2>&1; then
+    echo "ERROR: platform cluster '$plat' not reachable. Still running? Then re-run task test-e2e."; exit 1
+  fi
+  say "workload cluster: $wl    platform cluster: $plat"
 }
-K() { kubectl --kubeconfig="$KUBECONFIG_FILE" "$@"; }
+K()       { kubectl --kubeconfig="$KUBECONFIG_FILE" "$@"; }
+K_PLAT()  { kubectl --kubeconfig="$PLATFORM_KUBECONFIG" "$@"; }
+
+# find_tenant_namespace returns the platform-cluster namespace that holds the
+# tenant-scoped HelmReleases / OCIRepositories the controller manages.
+find_tenant_namespace() {
+  TENANT_NS=$(K_PLAT get helmreleases -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' 2>/dev/null | sort -u | grep '^mcp--' | head -1)
+  if [ -z "$TENANT_NS" ]; then
+    echo "ERROR: no tenant namespace (mcp--*) with HelmReleases found on platform cluster — is the ODG instance reconciled?"
+    exit 1
+  fi
+  say "tenant ns: $TENANT_NS"
+}
 
 cmd_up() {
   say "1/4  backends (Docker)"
@@ -61,26 +88,62 @@ cmd_up() {
   done
   [ $ok -eq 1 ] || echo "WARN: dashboards not ready — data view not created (do it manually in OS Dashboards)"
 
-  find_kubeconfig
+  find_kubeconfigs
+  find_tenant_namespace
 
-  say "4/5  helm install metrics-operator + collector  namespace=$NS"
-  K create namespace "$NS" --dry-run=client -o yaml | K apply -f -
-  helm upgrade --install metrics-operator-local \
-    oci://ghcr.io/openmcp-project/charts/metrics-operator --version v1.2.0 \
-    --set fullnameOverride=metrics-operator-local \
-    -n "$NS" --kubeconfig="$KUBECONFIG_FILE" --wait --timeout 3m || exit 1
-  helm upgrade --install otel-collector-local \
-    oci://ghcr.io/open-telemetry/opentelemetry-helm-charts/opentelemetry-collector --version 0.176.0 \
-    -f "$HERE/collector-values.yaml" -n "$NS" --kubeconfig="$KUBECONFIG_FILE" --wait --timeout 5m || exit 1
+  # Workaround for ODG's default-deny NetworkPolicy: the metrics-operator chart
+  # doesn't support extraManifests so we can't ship this via its ProviderConfig.
+  # Apply before helm install so the operator's init container can reach the API.
+  # The e2e test applies the same policy via telemetryNetworkPolicies() — any change
+  # here should be mirrored there.
+  cat <<'EOF' | K apply -f -
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-from-metrics-operator
+  namespace: odg-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: metrics-operator
+  policyTypes: [Egress]
+  egress:
+    - {}
+EOF
 
-  say "5/5  apply DataSink + Metric CRs"
+  say "4/6  apply values overlay ConfigMap on platform ns=$CONTROLLER_NS"
+  K_PLAT -n "$CONTROLLER_NS" create configmap "$VALUES_CM" \
+    --from-file=values.yaml="$HERE/telemetry-values.yaml" \
+    --dry-run=client -o yaml | K_PLAT apply -f -
+
+  say "5/6  attach helmValuesFrom on ProviderConfig chart=$CHART"
+  # find the index of the chart by name
+  IDX=$(K_PLAT get $PC_RESOURCE odg -o json | python3 -c "
+import json,sys
+pc=json.load(sys.stdin)
+for i,c in enumerate(pc['spec']['charts']):
+    if c['chartName']=='$CHART': print(i); break
+")
+  [ -n "$IDX" ] || { echo "ERROR: chart $CHART not found in ProviderConfig"; exit 1; }
+  K_PLAT patch $PC_RESOURCE odg --type=json -p="[{
+    \"op\": \"add\",
+    \"path\": \"/spec/charts/$IDX/helmValuesFrom\",
+    \"value\": [{\"kind\": \"ConfigMap\", \"name\": \"$VALUES_CM\"}]
+  }]"
+
+  say "6/6  apply DataSink + Metric CRs, wait for helm upgrade of $CHART"
   K apply -f "$HERE/metrics-operator-cr.yaml" || exit 1
+  # helm upgrade happens via the controller's next poll (default 1m) — wait for Ready=True
+  # with the new observed generation. After Ready, pods rolupdate automatically.
+  K_PLAT -n "$TENANT_NS" wait helmrelease "$CHART" --for=condition=Ready --timeout=5m
 
-  say "opening port-forward :8889 -> collector :8889 (for Prometheus scrape)"
-  lsof -ti tcp:8889 | xargs kill -9 2>/dev/null || true
-  pkill -f 'port-forward pod/.*8889:8889' 2>/dev/null || true
-  # the collector daemonset pod must be Ready before pf binds, else pf exits immediately
-  K rollout status ds/otel-collector-local-agent -n "$NS" --timeout=120s || { echo "ERROR: collector not ready"; exit 1; }
+  say "opening port-forward :8889 -> collector :8889 in $OBSERVED_NS (for Prometheus scrape)"
+  # Only kill kubectl port-forward processes we own — never kill arbitrary
+  # processes bound to :8889 (Docker Desktop's port proxy listens there and
+  # killing it crashes the whole docker daemon on macOS).
+  pkill -f 'kubectl.*port-forward.*8889:8889' 2>/dev/null || true
+  sleep 1
+  K rollout status ds/${CHART}-agent -n "$OBSERVED_NS" --timeout=120s || { echo "ERROR: collector not ready"; exit 1; }
   bind_pf
 
   echo
@@ -116,19 +179,34 @@ EOF
 }
 
 cmd_down() {
-  say "removing collector + metric CRs"
-  if name="$(kind get clusters 2>/dev/null | grep '^workload-odg' | head -1)"; then
-    kind get kubeconfig --name "$name" > /tmp/odg-telemetry-wl.kubeconfig 2>/dev/null || true
+  say "removing telemetry overlay + CRs (reverting $CHART to e2e default exporters)"
+  if wl="$(kind get clusters 2>/dev/null | grep '^workload-odg' | head -1)" \
+     && plat="$(kind get clusters 2>/dev/null | grep '^platform' | head -1)"; then
+    kind get kubeconfig --name "$wl"   > /tmp/odg-telemetry-wl.kubeconfig 2>/dev/null || true
+    kind get kubeconfig --name "$plat" > /tmp/odg-telemetry-plat.kubeconfig 2>/dev/null || true
     KUBECONFIG_FILE=/tmp/odg-telemetry-wl.kubeconfig
-    K delete -f "$HERE/metrics-operator-cr.yaml" --ignore-not-found
-    helm uninstall otel-collector-local metrics-operator-local -n "$NS" --kubeconfig="$KUBECONFIG_FILE" 2>/dev/null || true
-    pkill -f '8889:8889' 2>/dev/null || true
+    PLATFORM_KUBECONFIG=/tmp/odg-telemetry-plat.kubeconfig
+
+    K delete -f "$HERE/metrics-operator-cr.yaml" --ignore-not-found 2>/dev/null || true
+
+    IDX=$(K_PLAT get $PC_RESOURCE odg -o json 2>/dev/null | python3 -c "
+import json,sys
+pc=json.load(sys.stdin)
+for i,c in enumerate(pc['spec']['charts']):
+    if c['chartName']=='$CHART': print(i); break
+" 2>/dev/null)
+    if [ -n "$IDX" ]; then
+      K_PLAT patch $PC_RESOURCE odg --type=json \
+        -p="[{\"op\": \"remove\", \"path\": \"/spec/charts/$IDX/helmValuesFrom\"}]" 2>/dev/null || true
+    fi
+    K_PLAT -n "$CONTROLLER_NS" delete configmap "$VALUES_CM" --ignore-not-found 2>/dev/null || true
+    pkill -f 'kubectl.*port-forward.*8889:8889' 2>/dev/null || true
   else
-    say "no workload cluster found — skipping cluster teardown"
+    say "kind clusters not found — skipping cluster-side teardown"
   fi
   say "stopping backends"
   docker compose -f "$HERE/compose.yml" down
-  echo "  DOWN ✓  (data kept — use ./telemetry.sh reset to wipe)"
+  echo "  DOWN v  (data kept — use ./telemetry.sh reset to wipe)"
 }
 
 cmd_status() {
@@ -145,10 +223,15 @@ cmd_status() {
   curl -s -o /dev/null -w '  dashboards  %{http_code}\n' localhost:5601/api/status || echo "  dashboards  down"
   echo
   if name="$(kind get clusters 2>/dev/null | grep '^workload-odg' | head -1)"; then
-    say "cluster pods ($name):"
+    say "workload pods in $OBSERVED_NS ($name):"
     kind get kubeconfig --name "$name" > /tmp/odg-telemetry-wl.kubeconfig 2>/dev/null
-    kubectl --kubeconfig=/tmp/odg-telemetry-wl.kubeconfig get pods -n "$NS" --no-headers 2>/dev/null \
+    kubectl --kubeconfig=/tmp/odg-telemetry-wl.kubeconfig get pods -n "$OBSERVED_NS" --no-headers 2>/dev/null \
       | grep -E 'otel|metrics-operator' || echo "  (not installed)"
+    say "overlay ConfigMap on platform:"
+    plat=$(kind get clusters 2>/dev/null | grep '^platform' | head -1)
+    kind get kubeconfig --name "$plat" > /tmp/odg-telemetry-plat.kubeconfig 2>/dev/null
+    kubectl --kubeconfig=/tmp/odg-telemetry-plat.kubeconfig -n "$CONTROLLER_NS" get configmap "$VALUES_CM" --no-headers 2>/dev/null \
+      || echo "  (not applied — run ./telemetry.sh up)"
   fi
 }
 
@@ -161,13 +244,13 @@ cmd_reset() {
 # (re)bind :8889 to the current collector pod. Resolves the pod by label each loop-iteration,
 # so if the daemonset pod is recreated the forward follows it automatically.
 bind_pf() {
-  pkill -f '8889:8889' 2>/dev/null || true; sleep 1
+  pkill -f 'kubectl.*port-forward.*8889:8889' 2>/dev/null || true; sleep 1
   nohup bash -c '
     K=/tmp/odg-telemetry-wl.kubeconfig
     while true; do
-      pod=$(kubectl --kubeconfig="$K" -n telemetry-local get pod -l app.kubernetes.io/name=opentelemetry-collector --field-selector=status.phase=Running -o jsonpath="{.items[0].metadata.name}" 2>/dev/null)
+      pod=$(kubectl --kubeconfig="$K" -n odg-system get pod -l app.kubernetes.io/name=opentelemetry-collector --field-selector=status.phase=Running -o jsonpath="{.items[0].metadata.name}" 2>/dev/null)
       if [ -n "$pod" ]; then
-        kubectl --kubeconfig="$K" -n telemetry-local port-forward "pod/$pod" 8889:8889 >>/tmp/pf-otel-metrics.log 2>&1
+        kubectl --kubeconfig="$K" -n odg-system port-forward "pod/$pod" 8889:8889 >>/tmp/pf-otel-metrics.log 2>&1
       fi
       sleep 2
     done' >/dev/null 2>&1 &
