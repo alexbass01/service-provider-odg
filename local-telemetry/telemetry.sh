@@ -70,7 +70,7 @@ cmd_up() {
     --set fullnameOverride=metrics-operator-local \
     -n "$NS" --kubeconfig="$KUBECONFIG_FILE" --wait --timeout 3m || exit 1
   helm upgrade --install otel-collector-local \
-    oci://ghcr.io/open-telemetry/opentelemetry-helm-charts/opentelemetry-collector --version 0.139.0 \
+    oci://ghcr.io/open-telemetry/opentelemetry-helm-charts/opentelemetry-collector --version 0.176.0 \
     -f "$HERE/collector-values.yaml" -n "$NS" --kubeconfig="$KUBECONFIG_FILE" --wait --timeout 5m || exit 1
 
   say "5/5  apply DataSink + Metric CRs"

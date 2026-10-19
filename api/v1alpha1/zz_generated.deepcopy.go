@@ -77,11 +77,6 @@ func (in *ODGChart) DeepCopyInto(out *ODGChart) {
 		*out = new(string)
 		**out = **in
 	}
-	if in.HelmTimeout != nil {
-		in, out := &in.HelmTimeout, &out.HelmTimeout
-		*out = new(metav1.Duration)
-		**out = **in
-	}
 	if in.HelmValues != nil {
 		in, out := &in.HelmValues, &out.HelmValues
 		*out = new(apiextensionsv1.JSON)
@@ -261,11 +256,6 @@ func (in *ProviderConfigSpec) DeepCopyInto(out *ProviderConfigSpec) {
 	}
 	if in.PollInterval != nil {
 		in, out := &in.PollInterval, &out.PollInterval
-		*out = new(metav1.Duration)
-		**out = **in
-	}
-	if in.HelmTimeout != nil {
-		in, out := &in.HelmTimeout, &out.HelmTimeout
 		*out = new(metav1.Duration)
 		**out = **in
 	}

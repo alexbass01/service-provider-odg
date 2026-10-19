@@ -195,7 +195,7 @@ func (r *ODGReconciler) reconcileCharts(ctx context.Context, svcobj *apiv1alpha1
 	allReady := true
 	var resources []apiv1alpha1.ManagedResource
 	for _, chart := range providerConfig.Spec.Charts {
-		chartResources, err := r.reconcileChart(ctx, svcobj, chart, providerConfig.Spec.HelmTimeout, tenantNamespace, domainSuffix, clusters)
+		chartResources, err := r.reconcileChart(ctx, svcobj, chart, tenantNamespace, domainSuffix, clusters)
 		if err != nil {
 			return nil, false, err
 		}
@@ -209,7 +209,7 @@ func (r *ODGReconciler) reconcileCharts(ctx context.Context, svcobj *apiv1alpha1
 	return resources, allReady, nil
 }
 
-func (r *ODGReconciler) reconcileChart(ctx context.Context, svcobj *apiv1alpha1.ODG, chart apiv1alpha1.ODGChart, defaultHelmTimeout *metav1.Duration, tenantNamespace, domainSuffix string, clusters clusteraccess.ClusterContext) ([]apiv1alpha1.ManagedResource, error) {
+func (r *ODGReconciler) reconcileChart(ctx context.Context, svcobj *apiv1alpha1.ODG, chart apiv1alpha1.ODGChart, tenantNamespace, domainSuffix string, clusters clusteraccess.ClusterContext) ([]apiv1alpha1.ManagedResource, error) {
 	odgNamespace := StableODGNamespace(svcobj.Namespace, svcobj.Name)
 
 	if err := r.replicateChartPullSecret(ctx, chart.ChartPullSecretName, types.NamespacedName{Name: chart.ChartPullSecretName, Namespace: tenantNamespace}); err != nil {
@@ -248,7 +248,7 @@ func (r *ODGReconciler) reconcileChart(ctx context.Context, svcobj *apiv1alpha1.
 		return nil, fmt.Errorf("failed to write helm values secret: %w", err)
 	}
 
-	helmRel, err := r.createOrUpdateHelmRelease(ctx, chart.ChartName, chartTimeout(chart, defaultHelmTimeout), tenantNamespace, odgNamespace, valuesSecretName, svcobj)
+	helmRel, err := r.createOrUpdateHelmRelease(ctx, chart.ChartName, tenantNamespace, odgNamespace, valuesSecretName, svcobj)
 	if err != nil {
 		return nil, fmt.Errorf("failed to reconcile HelmRelease: %w", err)
 	}
@@ -536,8 +536,8 @@ func (r *ODGReconciler) createOrUpdateValuesSecret(ctx context.Context, name, na
 	return err
 }
 
-func (r *ODGReconciler) createOrUpdateHelmRelease(ctx context.Context, name string, timeout metav1.Duration, tenantNamespace, odgNamespace, valuesSecretName string, svcobj *apiv1alpha1.ODG) (*helmv2.HelmRelease, error) {
-	helmRelease, err := r.createHelmRelease(ctx, name, timeout, tenantNamespace, odgNamespace, valuesSecretName, svcobj)
+func (r *ODGReconciler) createOrUpdateHelmRelease(ctx context.Context, name string, tenantNamespace, odgNamespace, valuesSecretName string, svcobj *apiv1alpha1.ODG) (*helmv2.HelmRelease, error) {
+	helmRelease, err := r.createHelmRelease(ctx, name, tenantNamespace, odgNamespace, valuesSecretName, svcobj)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create helm release: %w", err)
 	}
@@ -560,7 +560,7 @@ func (r *ODGReconciler) createOrUpdateHelmRelease(ctx context.Context, name stri
 	return managedObj, nil
 }
 
-func (r *ODGReconciler) createHelmRelease(ctx context.Context, name string, timeout metav1.Duration, tenantNamespace, odgNamespace, valuesSecretName string, svcobj *apiv1alpha1.ODG) (*helmv2.HelmRelease, error) {
+func (r *ODGReconciler) createHelmRelease(ctx context.Context, name string, tenantNamespace, odgNamespace, valuesSecretName string, svcobj *apiv1alpha1.ODG) (*helmv2.HelmRelease, error) {
 	fluxConfigRef, err := r.getWorkloadFluxConfig(ctx, tenantNamespace, svcobj.Name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get FluxConfig: %w", err)
@@ -580,7 +580,6 @@ func (r *ODGReconciler) createHelmRelease(ctx context.Context, name string, time
 			Install: &helmv2.Install{
 				CRDs:            helmv2.Create,
 				CreateNamespace: true,
-				Timeout:         &timeout,
 				Remediation: &helmv2.InstallRemediation{
 					Retries: 1,
 				},
@@ -588,7 +587,6 @@ func (r *ODGReconciler) createHelmRelease(ctx context.Context, name string, time
 			Upgrade: &helmv2.Upgrade{
 				CRDs:          helmv2.CreateReplace,
 				CleanupOnFail: true,
-				Timeout:       &timeout,
 				Remediation: &helmv2.UpgradeRemediation{
 					Retries:  3,
 					Strategy: remediationStrategyPointer(helmv2.RollbackRemediationStrategy),
@@ -608,17 +606,6 @@ func (r *ODGReconciler) createHelmRelease(ctx context.Context, name string, time
 			},
 		},
 	}, nil
-}
-
-// chartTimeout resolves providerConfig default (or 2m) with the chart-level override.
-func chartTimeout(chart apiv1alpha1.ODGChart, defaults *metav1.Duration) metav1.Duration {
-	if chart.HelmTimeout != nil {
-		return *chart.HelmTimeout
-	}
-	if defaults != nil {
-		return *defaults
-	}
-	return metav1.Duration{Duration: 2 * time.Minute}
 }
 
 // stableRequestNameFromLocalName works like StableRequestName but takes a local name directly instead of a reconcile.Request.

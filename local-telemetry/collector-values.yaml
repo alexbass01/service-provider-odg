@@ -26,7 +26,7 @@ ports:
 image:
   repository: otel/opentelemetry-collector-contrib
 
-# k8sattributes needs to read pods (+ replicasets for deployment-name) across namespaces.
+# k8s_attributes needs to read pods (+ replicasets for deployment-name) across namespaces.
 # The chart's default rules are namespace-scoped to the release namespace; we watch odg-system.
 clusterRole:
   create: true
@@ -52,7 +52,9 @@ config:
   extensions:
     health_check: {}
   receivers:
-    filelog:
+    file_log:
+      # skip the collector's own logs — chart picks up its own pod via the same glob
+      exclude: [ /var/log/pods/odg-system_otel-collector-agent-*/*/*.log ]
       include: [ /var/log/pods/odg-system_*/*/*.log ]
       start_at: end
       include_file_path: true
@@ -67,7 +69,7 @@ config:
       protocols:
         grpc:
           endpoint: "0.0.0.0:4317"
-    hostmetrics:
+    host_metrics:
       collection_interval: 30s
       scrapers:
         cpu:
@@ -78,7 +80,7 @@ config:
             system.memory.utilization: { enabled: true }
 
   processors:
-    k8sattributes:
+    k8s_attributes:
       auth_type: serviceAccount
       filter:
         namespace: odg-system
@@ -113,7 +115,9 @@ config:
     # scrapes it through a kubectl port-forward (see telemetry.sh). No host-reachability needed.
     prometheus:
       endpoint: "0.0.0.0:8889"
-      resource_to_telemetry_conversion: { enabled: true }
+      # replicas resource_to_telemetry_conversion: {enabled: true}: promote all
+      # resource attrs (k8s.pod.name etc) to metric labels
+      resource_constant_labels: { included: [] }
     opensearch:
       http:
         endpoint: "http://host.docker.internal:9200"
@@ -127,11 +131,11 @@ config:
         level: basic
     pipelines:
       logs:
-        receivers: [ filelog ]
-        processors: [ memory_limiter, k8sattributes, batch ]
-        exporters: [ opensearch ]          # filelog include already scopes to odg-system (see filelog.include)
+        receivers: [ file_log ]
+        processors: [ memory_limiter, k8s_attributes, batch ]
+        exporters: [ opensearch ]          # file_log include already scopes to odg-system (see file_log.include)
       metrics:
-        receivers: [ otlp, hostmetrics ]
+        receivers: [ otlp, host_metrics ]
         processors: [ memory_limiter, batch ]
         exporters: [ prometheus ]  # served on :8889, scraped via port-forward
       traces:

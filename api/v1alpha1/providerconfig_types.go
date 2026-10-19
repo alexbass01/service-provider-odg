@@ -44,13 +44,6 @@ type ProviderConfigSpec struct {
 	// +kubebuilder:default:="1m"
 	// +kubebuilder:validation:Format=duration
 	PollInterval *metav1.Duration `json:"pollInterval,omitempty"`
-
-	// HelmTimeout is the default timeout for every Helm release, both install and
-	// upgrade. Per-chart override via charts[].helmTimeout. Defaults to 2m.
-	// +optional
-	// +kubebuilder:default:="2m"
-	// +kubebuilder:validation:Format=duration
-	HelmTimeout *metav1.Duration `json:"helmTimeout,omitempty"`
 }
 
 // ODGChart defines a Helm chart of ODG that can be installed.
@@ -74,13 +67,6 @@ type ODGChart struct {
 	// ChartVersion is the tag of the Helm chart to install.
 	// +required
 	ChartVersion string `json:"chartVersion"`
-
-	// HelmTimeout overrides ProviderConfig.spec.helmTimeout for this chart only,
-	// for releases that need longer than the default (e.g. operator-driven charts
-	// whose pods have slow admission-webhook startup).
-	// +optional
-	// +kubebuilder:validation:Format=duration
-	HelmTimeout *metav1.Duration `json:"helmTimeout,omitempty"`
 
 	// HelmValues are arbitrary Helm values passed directly to the managed HelmRelease.
 	// +optional
