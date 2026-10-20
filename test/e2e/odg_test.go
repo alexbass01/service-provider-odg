@@ -12,7 +12,6 @@ import (
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -231,21 +230,6 @@ func TestServiceProvider(t *testing.T) {
 					}
 					return keys
 				}())
-				return ctx
-			},
-		).
-		Assess("apply telemetry NetworkPolicies on workload-odg cluster",
-			func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-				workloadCfg, err := getWorkloadClusterConfig()
-				if err != nil {
-					t.Errorf("failed to get workload-odg cluster config: %v", err)
-					return ctx
-				}
-				for _, np := range telemetryNetworkPolicies() {
-					if err := workloadCfg.Client().Resources().Create(ctx, np); err != nil && !apierrors.IsAlreadyExists(err) {
-						t.Errorf("failed to create NetworkPolicy %s: %v", np.GetName(), err)
-					}
-				}
 				return ctx
 			},
 		).

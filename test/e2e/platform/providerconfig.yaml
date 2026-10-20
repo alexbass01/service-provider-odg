@@ -78,172 +78,23 @@ spec:
               memory: 256Mi
           persistence:
             mountPath: /data/
-    # otel telemetry — public charts now, SAP-internal registry later (switch =
-    # chartURL + chartPullSecretName: artifactory; see discussions/12-otel/02-…)
-    # otel collector — no operator, no webhook probes, just the collector daemonset
-    - chartName: otel-collector
-      chartURL: ghcr.io/open-telemetry/opentelemetry-helm-charts/opentelemetry-collector
-      chartVersion: 0.176.0
-      # intentionally no chartPullSecretName — public OCI
-      # chart artifact carries a .prov provenance side-layer alongside the tarball;
-      # select the actual chart layer so flux doesn't try to extract the .prov blob.
+    # telemetry — umbrella chart (collector daemonset + metrics-operator + Metric
+    # CRs + NetworkPolicies) from odg-observability. Chart defaults carry the whole
+    # collector config (filelog/k8sattributes/hostmetrics/batch/memory_limiter,
+    # :8889 prometheus exporter, RBAC); only environment knobs live here.
+    - chartName: telemetry
+      # TODO: set after first push — see odg-observability/docs/publish-chart-to-ghcr.md
+      chartURL: oci://ghcr.io/YOURUSER/charts/telemetry
+      chartVersion: 0.2.0
+      # no chartPullSecretName while the ghcr package is public
+      # ghcr sometimes adds a .prov provenance layer; select the real chart blob so
+      # flux doesn't try to extract the .prov one.
       chartLayerSelector:
         mediaType: application/vnd.cncf.helm.chart.content.v1.tar+gzip
         operation: extract
       helmValues:
-        # Open OTLP/prometheus endpoints to in-cluster traffic. ODG's bootstrapping chart
-        # ships a namespace-wide default-deny NetworkPolicy, so the collector cannot be
-        # reached from other pods unless we explicitly allow it.
-        extraManifests:
-          - apiVersion: networking.k8s.io/v1
-            kind: NetworkPolicy
-            metadata:
-              name: allow-ingress-to-otel-collector
-            spec:
-              podSelector:
-                matchLabels:
-                  app.kubernetes.io/name: opentelemetry-collector
-              policyTypes: [Ingress]
-              ingress:
-                - ports:
-                    - { port: 4317, protocol: TCP }
-                    - { port: 4318, protocol: TCP }
-                    - { port: 8889, protocol: TCP }
-          - apiVersion: networking.k8s.io/v1
-            kind: NetworkPolicy
-            metadata:
-              name: allow-egress-from-otel-collector
-            spec:
-              podSelector:
-                matchLabels:
-                  app.kubernetes.io/name: opentelemetry-collector
-              policyTypes: [Egress]
-              egress:
-                - {}
-        mode: daemonset
-        fullnameOverride: otel-collector
-        image:
-          repository: otel/opentelemetry-collector-contrib
-        # daemonset mode + helm chart creates a ClusterIP Service for OTLP/HTTP so that
-        # in-cluster clients (e.g. metrics-operator DataSink) can push to :4317.
-        service:
-          enabled: true
-        # drop hostPort bindings — with kindnet they bypass kube-proxy, breaking
-        # pod -> collector communication inside the cluster. ClusterIP Service is enough.
-        ports:
-          otlp:
-            enabled: true
-            hostPort: 0
-          otlp-http:
-            enabled: true
-            hostPort: 0
-        clusterRole:
-          create: true
-          # chart creates an empty ClusterRole when no preset needs one; k8s_attributes
-          # and host_metrics need explicit rules
-          rules:
-            - apiGroups: [""]
-              resources: [pods, namespaces, nodes]
-              verbs: [get, list, watch]
-            - apiGroups: ["apps"]
-              resources: [replicasets, deployments, daemonsets, statefulsets]
-              verbs: [get, list, watch]
-        # presets all default to disabled — no preset block needed.
-        # file_log needs host log mounts (normally added by the logsCollection preset, which is off).
-        extraVolumes:
-          - name: varlogpods
-            hostPath: {path: /var/log/pods}
-          - name: varlibdockercontainers
-            hostPath: {path: /var/lib/docker/containers}
-        extraVolumeMounts:
-          - {name: varlogpods, mountPath: /var/log/pods, readOnly: true}
-          - {name: varlibdockercontainers, mountPath: /var/lib/docker/containers, readOnly: true}
-        config:
-          extensions:
-            health_check: {}
-          receivers:
-            file_log:
-              # keep self-observation quiet: don't ship the collector's own logs
-              # (helm chart runs as agent-* pods, matches its own include glob)
-              exclude: [/var/log/pods/odg-system_otel-collector-agent-*/*/*.log]
-              include: [/var/log/pods/odg-system_*/*/*.log]
-              start_at: end
-              include_file_path: true
-              operators:
-                - id: container-parser
-                  type: container
-                  add_metadata_from_filepath: true
-                - id: json-parser
-                  type: json_parser
-                  if: 'body matches "^{"'
-            otlp:
-              protocols:
-                grpc:
-                  endpoint: "0.0.0.0:4317"
-            host_metrics:
-              collection_interval: 30s
-              scrapers:
-                cpu:
-                  metrics:
-                    system.cpu.utilization: {enabled: true}
-                memory:
-                  metrics:
-                    system.memory.utilization: {enabled: true}
-          processors:
-            k8s_attributes:
-              auth_type: serviceAccount
-              filter:
-                namespace: odg-system
-              pod_association:
-                - sources:
-                    - from: resource_attribute
-                      name: k8s.pod.uid
-              extract:
-                metadata: [k8s.namespace.name, k8s.pod.name, k8s.deployment.name, k8s.container.name]
-                annotations:
-                  - key: otel.io/pod-logs
-                    from: pod
-            filter/only_annotated:
-              error_mode: ignore
-              logs:
-                log_record:
-                  - 'resource.attributes["k8s.pod.annotation.otel.io/pod-logs"] != "true"'
-            batch:
-              timeout: 5s
-              send_batch_size: 1024
-              send_batch_max_size: 2048
-            memory_limiter:
-              check_interval: 1s
-              limit_mib: 512
-              spike_limit_mib: 128
-          exporters:
-            debug:
-              verbosity: basic
-            prometheus:
-              endpoint: "0.0.0.0:8889"
-              # replicas resource_to_telemetry_conversion: {enabled: true}: promote all
-              # resource attrs (k8s.pod.name etc) to metric labels
-              resource_constant_labels: {included: []}
-          service:
-            extensions: [health_check]
-            telemetry:
-              metrics:
-                level: basic
-            pipelines:
-              logs:
-                receivers: [file_log]
-                processors: [memory_limiter, k8s_attributes, filter/only_annotated, batch]
-                exporters: [debug]
-              metrics:
-                receivers: [otlp, host_metrics]
-                processors: [memory_limiter, batch]
-                exporters: [debug, prometheus]   # prometheus serves :8889 for scraping
-              traces:
-                receivers: [otlp]
-                processors: [memory_limiter, batch]
-                exporters: [debug]
-    - chartName: metrics-operator
-      chartURL: ghcr.io/openmcp-project/charts/metrics-operator
-      chartVersion: v1.2.2   # published tags carry the v prefix
-      # intentionally no chartPullSecretName — public OCI
+        backend: debug                      # e2e asserts via debug exporter output
+        observedNamespace: odg-system
+        # backend: opensearch would also need opensearch.endpoint; btp needs
+        # btp.endpoint + btp.certsSecret. See chart values.yaml.
   pollInterval: 1m
