@@ -83,9 +83,8 @@ spec:
     # collector config (filelog/k8sattributes/hostmetrics/batch/memory_limiter,
     # :8889 prometheus exporter, RBAC); only environment knobs live here.
     - chartName: telemetry
-      # TODO: set after first push — see odg-observability/docs/publish-chart-to-ghcr.md
-      chartURL: oci://ghcr.io/YOURUSER/charts/telemetry
-      chartVersion: 0.2.0
+      chartURL: oci://ghcr.io/alexbass01/charts/telemetry  # TODO: move to a SAP org registry when available
+      chartVersion: 0.2.9
       # no chartPullSecretName while the ghcr package is public
       # ghcr sometimes adds a .prov provenance layer; select the real chart blob so
       # flux doesn't try to extract the .prov one.

@@ -69,18 +69,57 @@ cmd_up() {
 
   find_kubeconfig
 
-  say "3/4  helm upgrade --install $RELEASE (backend=opensearch → host.docker.internal)"
-  helm --kubeconfig="$KUBECONFIG_FILE" dependency update "$CHART" >/dev/null
-  helm --kubeconfig="$KUBECONFIG_FILE" upgrade --install "$RELEASE" "$CHART" \
-    --namespace "$OBSERVED_NS" --create-namespace \
-    --set backend=opensearch \
-    --set opensearch.endpoint=http://host.docker.internal:9200 \
-    --set observedNamespace="$OBSERVED_NS" \
-    --set annotationKey="" \
-    --timeout 5m || { echo "ERROR: helm install failed"; exit 1; }
+  # Skip install if e2e already put telemetry on the cluster. Patch the
+  # platform providerconfig (the controller's source of truth) to flip backend,
+  # then wait for flux to reconcile. Patching helm/OCIRepository directly is a
+  # losing game — flux reconciles from its own source every tick.
+  if K get deploy ${RELEASE}-metrics-operator -n "$OBSERVED_NS" >/dev/null 2>&1; then
+    PLAT=$(kind get clusters | grep '^platform' | head -1)
+    kind get kubeconfig --name "$PLAT" > /tmp/odg-telemetry-plat.kubeconfig
+    TENANT=$(kubectl --kubeconfig=/tmp/odg-telemetry-plat.kubeconfig get hr -A -o jsonpath='{.items[?(@.metadata.name=="telemetry")].metadata.namespace}')
+    CURRENT_BACKEND=$(kubectl --kubeconfig=/tmp/odg-telemetry-plat.kubeconfig -n "$TENANT" get secret telemetry-values -o jsonpath='{.data.values\.yaml}' 2>/dev/null | base64 -d 2>/dev/null | python3 -c "import json,sys
+print(json.load(sys.stdin).get('backend','unknown'))" 2>/dev/null || echo "unknown")
+    IDX=$(kubectl --kubeconfig=/tmp/odg-telemetry-plat.kubeconfig get providerconfigs.odg.services.open-control-plane.io odg -o json | python3 -c "import json,sys; pc=json.load(sys.stdin); print([i for i,c in enumerate(pc['spec']['charts']) if c['chartName']=='telemetry'][0])")
+    if [ "$CURRENT_BACKEND" != "opensearch" ]; then
+      say "3/4  telemetry chart already installed (backend: $CURRENT_BACKEND) — patching providerconfig to opensearch"
+      kubectl --kubeconfig=/tmp/odg-telemetry-plat.kubeconfig patch providerconfigs.odg.services.open-control-plane.io odg --type=json \
+        -p="[{\"op\":\"replace\",\"path\":\"/spec/charts/$IDX/helmValues\",\"value\":{\"backend\":\"opensearch\",\"observedNamespace\":\"$OBSERVED_NS\",\"annotationKey\":\"\",\"opensearch\":{\"endpoint\":\"http://host.docker.internal:9200\"}}}]" >/dev/null
+      say "     providerconfig patched → flux reconciles in ~1m"
+    else
+      say "3/4  telemetry chart already installed (backend: opensearch)"
+    fi
+    # Pods must not be restarted until the workload ConfigMap reflects the
+    # patched backend — restarts before that would re-read stale config and
+    # leave logs flowing nowhere. Poll the CM (kubelet volume sync lags Helm).
+    if [ "$CURRENT_BACKEND" != "opensearch" ]; then
+      say "     waiting for workload ConfigMap to reflect backend=opensearch (flux + kubelet fsync lag)"
+      local seen=0
+      for _ in $(seq 1 60); do
+        if K -n "$OBSERVED_NS" get cm telemetry-override -o jsonpath='{.data.relay}' 2>/dev/null | grep -q 'opensearch/logs:'; then
+          seen=1; break
+        fi
+        sleep 2
+      done
+      [ $seen -eq 1 ] || { echo "ERROR: ConfigMap never landed backend=opensearch after 2m"; exit 1; }
+    fi
 
-  K rollout status ds/${RELEASE}-opentelemetry-collector-agent -n "$OBSERVED_NS" --timeout=180s \
-    || { echo "ERROR: collector not ready — K logs ds/${RELEASE}-opentelemetry-collector-agent"; exit 1; }
+    # Restart the collector NOW (the new CM is on disk), wait for ready.
+    K rollout restart ds/${RELEASE}-opentelemetry-collector-agent -n "$OBSERVED_NS" >/dev/null
+    K rollout status ds/${RELEASE}-opentelemetry-collector-agent -n "$OBSERVED_NS" --timeout=180s >/dev/null \
+      || { echo "ERROR: collector rollout failed"; exit 1; }
+  else
+    say "3/4  helm upgrade --install $RELEASE (backend=opensearch → host.docker.internal)"
+    helm --kubeconfig="$KUBECONFIG_FILE" dependency update "$CHART" >/dev/null
+    helm --kubeconfig="$KUBECONFIG_FILE" upgrade --install "$RELEASE" "$CHART" \
+      --namespace "$OBSERVED_NS" --create-namespace \
+      --set backend=opensearch \
+      --set opensearch.endpoint=http://host.docker.internal:9200 \
+      --set observedNamespace="$OBSERVED_NS" \
+      --set annotationKey="" \
+      --timeout 5m || { echo "ERROR: helm install failed"; exit 1; }
+    K rollout status deploy/${RELEASE}-opentelemetry-collector -n "$OBSERVED_NS" --timeout=180s \
+      || { echo "ERROR: collector not ready — K logs deploy/${RELEASE}-opentelemetry-collector"; exit 1; }
+  fi
 
   say "4/4  port-forward :8889 -> collector :8889 (Prometheus scrape source)"
   bind_pf
